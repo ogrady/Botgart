@@ -23,7 +23,6 @@ import { TagBroadcastService } from "./services/TagBroadcastService";
 import { ValidationService } from "./services/ValidationService";
 import { CommanderStorage, TS3Connection, TS3Listener } from "./TS3Connection";
 import { logger } from "./util/Logging";
-import * as Util from "./util/Util";
 import { WvWWatcher } from "./WvWWatcher";
 
 const LOG = logger();
@@ -118,56 +117,21 @@ export class BotgartClient extends akairo.AkairoClient {
         });
         this.inhibitorHandler.loadAll();
 
-        // yes, both listeners listen to wvw-matches on purpose,
-        // as it contains the info on the stats as well as on the objectives!
         this.gw2apiemitter.on("wvw-matches", (prom) => {
             prom.then(async stats => {
                 if (stats === undefined || stats.maps == undefined) {
                     LOG.info("Got a bad result from the WvW api. Skipping listener.");
                     return;
                 }
-                LOG.debug("Starting to write WvWStats.");
+                LOG.debug("Starting to write WvW Statistics.");
                 const match = await this.wvwWatcher.getCurrentMatch();
                 if (match === undefined) {
                     LOG.error("Could not produce a proper matchup. API might be down.");
                 } else {
-                    const snapshotId = this.matchupRepository.addStatsSnapshot();
-                    for await (const mapData of stats.maps) {
-                        for (const faction in mapData.scores) { // keys of the dict, aka red, blue, green
-                            this.matchupRepository.addMatchupStats(
-                                match.matchup_id,
-                                snapshotId,
-                                mapData.type, // map
-                                Util.capitalise(faction), // keys are lowercase, DB constraint is capitalised
-                                mapData.deaths[faction],
-                                mapData.kills[faction],
-                                mapData.scores[faction]);
-                        }
-                    }
+                    await this.matchupRepository.addStats(stats, match);
+                    await this.matchupRepository.addObjectives(stats, match);
                 }
-                LOG.debug("Done writing WvWStats.");
-            }).catch(reason => LOG.error("Error handling wvw-matches event: " + reason));
-        });
-
-        this.gw2apiemitter.on("wvw-matches", (prom) => {
-            prom.then(async match => {
-                if (match === undefined || match.maps === undefined) {
-                    LOG.info("Got a bad result from the WvW api. Skipping listener.");
-                    return;
-                }
-                LOG.debug("Starting to write WvWMatches.");
-                const matchInfo = await this.wvwWatcher.getCurrentMatch();
-                if (matchInfo === undefined) {
-                    LOG.error("Current match should be available at this point, but getCurrentMatch created an empty result. Will not add objectives either.");
-                } else {
-                    const snapshotId = this.matchupRepository.addObjectivesSnapshot();
-                    const objs = match.maps
-                        .reduce((acc, m) => acc.concat(m.objectives.map(obj => [m.type, obj])), []) // put objectives from all maps into one array
-                        // .filter(([m, obj]) => obj.type !== "Spawn") // remove spawn - not interesting
-                        .map(([m, obj]) => [m, obj, Util.determineTier(obj.yaks_delivered)]); // add tier information
-                    this.matchupRepository.addMatchupObjectives(matchInfo.matchup_id, snapshotId, objs);
-                }
-                LOG.debug("Done writing WvWMatches.");
+                LOG.debug("Done writing WvW Statistics.");
             }).catch(reason => LOG.error("Error handling wvw-matches event: " + reason));
         });
 
